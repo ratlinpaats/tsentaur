@@ -15,18 +15,21 @@
 #include <windows.h>
 #include <thread>
 
-void HandleUserInput(char* input)
+void HandleUserInput(char* input, char* arg)
 {
     char userInput[CHAR_LENGTH];
+    char userArg[CHAR_LENGTH];
     while(true)
     {
-        scanf("%s",userInput);
-        if(userInput)
-        {
+        fgets(userInput, sizeof(userInput), stdin);
+
+        // Remove trailing newline character
+        if (userInput[strlen(userInput) - 1] == '\n')
+            userInput[strlen(userInput) - 1] = '\0';
+
+        // Copy the user input to the shared char array
         
-        strcpy(input,userInput);
-        
-        }
+        strcpy(input, userInput);
     };
 }
 
@@ -43,13 +46,33 @@ void HandleSocketPolling(WSAPOLLFD *pfds, int pfds_len, char* input)
 
     while(true)
     {
-        printf("Polling...\n");
+        
+        if(input)
+        {
+            if(strcmp(input,"list") == 0)
+            {
+                printf("Socket list:\n===============================\n");
+                printf("Listener: %d\n",pfds[0].fd);
+                for(int i = 1; i<pfds_len; i++)
+                {
+                    printf("%d : %s\n",i,pfds[i].fd);
+                }
+                memset(input, '\0', sizeof(input));
+            }
 
-        printf("%s",input);
-        memset(input, '\0', sizeof(input));
+            else
+            {
+                /* printf("incorrect input!\n"); */
+                memset(input, '\0', sizeof(input));
+            }
+        }
+
         
 
-        num_events = WSAPoll(pfds, pfds_len, 3000);
+        
+
+
+        num_events = WSAPoll(pfds, pfds_len, 1000);
 
         if (num_events == SOCKET_ERROR)
         {
@@ -67,6 +90,7 @@ void HandleSocketPolling(WSAPOLLFD *pfds, int pfds_len, char* input)
                         {
                             addrlen = (int)sizeof(clientaddr);
                             tempfd = accept (listener, (struct sockaddr *)&clientaddr, &addrlen);
+                            
                             if(tempfd == INVALID_SOCKET)
                             {
                                 fprintf(stderr,"failed to accept a client");
@@ -77,12 +101,14 @@ void HandleSocketPolling(WSAPOLLFD *pfds, int pfds_len, char* input)
                                 {
                                 fprintf(stderr,"too many clients!");
                                 }                                                                    
+                            
                             pfds[pfds_len].fd = tempfd;
                             pfds[pfds_len].events = POLLIN;
                             pfds[pfds_len].revents = 0;
+                            
                             pfds_len++;
-
-                            printf("new connection %s on socket %lld\n",clientaddr.ss_family,tempfd);
+                            printf("we're here?? %d, %d\n", tempfd, pfds_len);
+                            printf("new connection %s on socket %d\n",clientaddr.ss_family,tempfd);
                             }
                         }
                         else
@@ -134,7 +160,7 @@ int main()
 
     WSAPOLLFD pfds[MAXIMUM_CLIENTS];
     bool yes;
-    char in_put[CHAR_LENGTH];
+    char in_put[CHAR_LENGTH], a_rgs[CHAR_LENGTH];
 
 
     status = WSAStartup(MAKEWORD(2,2),&s_wsaData);
@@ -225,7 +251,7 @@ int main()
     pfds[0].revents=0;
     pfd_len = 1;
     
-    std::thread userInputThread(HandleUserInput, in_put);
+    std::thread userInputThread(HandleUserInput, in_put, a_rgs);
 
     // Start the socket polling thread
     std::thread socketPollingThread(HandleSocketPolling, pfds, pfd_len, in_put);
