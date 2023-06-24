@@ -37,7 +37,7 @@ class Connection
         }
         void printinfo()
         {
-            wprintf("%d  %s  %ls  %ls  %ls", sockfd, ip, userName, domainName, machineName);
+            wprintf(L"%d  %s  %ls  %ls  %ls", sockfd, ip, userName, domainName, machineName);
         }
         void clear()
         {
