@@ -15,6 +15,44 @@
 #include <windows.h>
 #include <thread>
 
+#include "commonfunct.h"
+
+
+
+class Connection
+{
+    public:
+        SOCKET sockfd;
+        char ip[INET6_ADDRSTRLEN];
+        wchar_t userName[256];
+        wchar_t domainName[16];
+        wchar_t machineName[16];
+        void defineConnection(SOCKET inSock, const char* inIp, wchar_t* inUN, wchar_t* inDN, wchar_t* inMN)
+        {
+            sockfd = inSock;
+            strcpy(ip,inIp);
+            wcscpy(userName,inUN);
+            wcscpy(domainName,inDN);
+            wcscpy(machineName,inMN);
+        }
+        void printinfo()
+        {
+            wprintf("%d  %s  %ls  %ls  %ls", sockfd, ip, userName, domainName, machineName);
+        }
+        void clear()
+        {
+            sockfd = 0;
+            memset(ip, 0, sizeof(ip));
+            memset(userName, 0, sizeof(userName));
+            memset(domainName, 0, sizeof(domainName));
+            memset(machineName, 0, sizeof(machineName));
+        }
+};
+
+
+
+
+
 void HandleUserInput(char* input, char* arg)
 {
     char userInput[CHAR_LENGTH];
@@ -33,7 +71,7 @@ void HandleUserInput(char* input, char* arg)
     };
 }
 
-void HandleSocketPolling(WSAPOLLFD *pfds, int pfds_len, char* input)
+void HandleSocketPolling(WSAPOLLFD *pfds, int pfds_len, char* input, Connection *conlist)
 {
 
     int num_events = 0;
@@ -52,10 +90,10 @@ void HandleSocketPolling(WSAPOLLFD *pfds, int pfds_len, char* input)
             if(strcmp(input,"list") == 0)
             {
                 printf("Socket list:\n===============================\n");
-                printf("Listener: %d\n",pfds[0].fd);
+                printf("Listener: ");  conlist[0].printinfo(); printf("\n");
                 for(int i = 1; i<pfds_len; i++)
                 {
-                    printf("%d : %s\n",i,pfds[i].fd);
+                    printf("%d : "); conlist[i].printinfo(); printf("\n");
                 }
                 memset(input, '\0', sizeof(input));
             }
@@ -99,7 +137,7 @@ void HandleSocketPolling(WSAPOLLFD *pfds, int pfds_len, char* input)
                             {
                                 if ((pfds_len) == (MAXIMUM_CLIENTS-1))
                                 {
-                                fprintf(stderr,"too many clients!");
+                                fprintf(stderr,"client rejected: too many clients!");
                                 }                                                                    
                             
                             pfds[pfds_len].fd = tempfd;
@@ -107,8 +145,8 @@ void HandleSocketPolling(WSAPOLLFD *pfds, int pfds_len, char* input)
                             pfds[pfds_len].revents = 0;
                             
                             pfds_len++;
-                            printf("we're here?? %d, %d\n", tempfd, pfds_len);
-                            printf("new connection %s on socket %d\n",clientaddr.ss_family,tempfd);
+                            printf("new connection %s on socket %d\n",addrtostr( (reinterpret_cast<sockaddr*>(&clientaddr) ) ),tempfd);
+                            
                             }
                         }
                         else
@@ -117,9 +155,9 @@ void HandleSocketPolling(WSAPOLLFD *pfds, int pfds_len, char* input)
                             tempfd = pfds[i].fd;
                             if (bytes_received == SOCKET_ERROR || bytes_received == 0)
                             {
-                                if (bytes_received == 0) // Connection closed
+                                if (bytes_received == 0 || pfds[i].revents & POLLHUP) // Connection closed
                                 {
-                                    fprintf(stderr,"socket %lld hung up\n",tempfd);
+                                    fprintf(stderr,"socket %d hung up\n",tempfd);
                                 }
                                 else
                                 {
@@ -152,6 +190,7 @@ void HandleSocketPolling(WSAPOLLFD *pfds, int pfds_len, char* input)
 
 int main()
 {
+    
     WSADATA s_wsaData;
     int status, num_events, addrlen, pfd_len;
     struct addrinfo hints, *res, *p; 
@@ -161,6 +200,7 @@ int main()
     WSAPOLLFD pfds[MAXIMUM_CLIENTS];
     bool yes;
     char in_put[CHAR_LENGTH], a_rgs[CHAR_LENGTH];
+    Connection conlist[MAXIMUM_CLIENTS];
 
 
     status = WSAStartup(MAKEWORD(2,2),&s_wsaData);
@@ -244,6 +284,9 @@ int main()
     }
 
     freeaddrinfo(res);
+    
+    conlist[0].defineConnection(listener, addrtostr( p->ai_addr ), GetUserName(), GetDomainName(), GetMachineName() );
+
 
     printf("Successfully initialized the server, polling clients...\n");
     pfds[0].fd=listener;
@@ -254,7 +297,7 @@ int main()
     std::thread userInputThread(HandleUserInput, in_put, a_rgs);
 
     // Start the socket polling thread
-    std::thread socketPollingThread(HandleSocketPolling, pfds, pfd_len, in_put);
+    std::thread socketPollingThread(HandleSocketPolling, pfds, pfd_len, in_put, conlist);
 
     // Wait for the threads to finish
     userInputThread.join();

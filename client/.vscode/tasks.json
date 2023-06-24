@@ -12,7 +12,8 @@
 				"-o",
 				"${workspaceFolder}\\client.exe",
 				"-lws2_32",
-				"-lgdiplus"
+				"-lgdiplus",
+				"-lgdi32"
 			],
 			"options": {
 				"cwd": "${fileDirname}"

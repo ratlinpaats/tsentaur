@@ -3,17 +3,154 @@
 #endif
 
 #include <stdio.h>
-#include <windows.h>
+#include <objidl.h>
 #include <winsock2.h>
+#include <windows.h>
 #include <ws2tcpip.h>
+#include <gdiplus.h>
+
+#include <vector>
 
 #define MAXDATASIZE 2048
 #define PORT "40454" // The port to which the client will be connecting
 
+
+std::vector<BYTE> CaptureScreen()
+{
+    // Initialize GDI+
+    Gdiplus::GdiplusStartupInput gdiplusStartupInput;
+    ULONG_PTR gdiplusToken;
+    Gdiplus::GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, nullptr);
+
+    // Get the screen dimensions
+    int screenWidth = GetSystemMetrics(SM_CXSCREEN);
+    int screenHeight = GetSystemMetrics(SM_CYSCREEN);
+
+    // Create a bitmap for the screen image
+    HDC screenDC = GetDC(nullptr);
+    HDC memoryDC = CreateCompatibleDC(screenDC);
+    HBITMAP screenBitmap = CreateCompatibleBitmap(screenDC, screenWidth, screenHeight);
+    HGDIOBJ oldBitmap = SelectObject(memoryDC, screenBitmap);
+
+    // Copy the screen content onto the bitmap
+    BitBlt(memoryDC, 0, 0, screenWidth, screenHeight, screenDC, 0, 0, SRCCOPY);
+
+    // Create a Graphics object from the bitmap
+    Gdiplus::Bitmap gdiBitmap(screenBitmap, nullptr);
+
+    // Lock the bitmap for direct access to the pixel data
+    Gdiplus::BitmapData bitmapData;
+    Gdiplus::Rect rect(0, 0, screenWidth, screenHeight);
+    gdiBitmap.LockBits(&rect, Gdiplus::ImageLockModeRead, PixelFormat32bppARGB, &bitmapData);
+
+    // Calculate the size of the raw pixel data
+    size_t imageSize = bitmapData.Height * bitmapData.Stride;
+
+    // Create a vector to hold the raw pixel data
+    std::vector<BYTE> imageData(imageSize);
+
+    // Copy the pixel data to the vector
+    memcpy(imageData.data(), bitmapData.Scan0, imageSize);
+
+    
+    // Unlock the bitmap
+    gdiBitmap.UnlockBits(&bitmapData);
+
+    
+    // Cleanup resources
+    SelectObject(memoryDC, oldBitmap);
+    DeleteObject(screenBitmap);
+    DeleteDC(memoryDC);
+    ReleaseDC(nullptr, screenDC);
+    Gdiplus::GdiplusShutdown(gdiplusToken);
+
+    return imageData;
+}
+
+
+void SendScreenshot(SOCKET sockfd, std::vector<BYTE> imageData)
+{
+
+    int totalBytesSent = 0;
+    int bytesRemaining = imageData.size();
+
+    while (bytesRemaining > 0)
+    {
+        int bytesSent = send(sockfd, reinterpret_cast<char*>(imageData.data()) + totalBytesSent, bytesRemaining, 0);
+        if (bytesSent == SOCKET_ERROR)
+        {
+            fprintf(stderr, "failed to send the screenshot\n" );
+            break;
+        }
+
+        totalBytesSent += bytesSent;
+        bytesRemaining -= bytesSent;
+    }
+}
+
+SOCKET ConnectToServer(char *servName)
+{
+   SOCKET sockfd;
+   struct addrinfo *p, hints, *res;
+   int addrlen, status;
+   memset(&hints,0,sizeof(hints));
+
+   hints.ai_family   = AF_UNSPEC;   // AF_INET or AF_INET6 to force version
+   hints.ai_socktype = SOCK_STREAM; // Streaming socket
+
+   while(true)
+   {
+      if (getaddrinfo(servName,PORT,&hints,&res) != 0)
+      {
+
+         fprintf(stderr,"getaddrinfo catastrophically failed");
+         WSACleanup();
+
+         return 0;
+      }
+
+      for (p = res ; p != NULL ; p = p->ai_next)
+      {
+         sockfd = socket(p->ai_family,p->ai_socktype,p->ai_protocol);
+         if (sockfd == INVALID_SOCKET)
+         {
+            fprintf(stderr,"Socket failed, retrying\n");
+            continue;
+         }
+
+         addrlen = (int)p->ai_addrlen;
+         status = connect(sockfd,p->ai_addr,addrlen);
+
+         if (status == SOCKET_ERROR)
+         {
+            fprintf(stderr,"Socket connect failed, retrying\n");
+            closesocket(sockfd);
+            continue;
+         }
+
+         break;
+      }
+
+      if (p == NULL)
+      {
+         fprintf(stderr,"Failed to connect, retrying.\n");
+         freeaddrinfo(p);
+      }
+      else
+      {
+         break;
+      }
+   }
+
+   printf("Successfully connected to %s.\n", servName);
+   freeaddrinfo(res);
+   return sockfd;
+}
+
 int main(int argc,char *argv[])
 {
-   struct addrinfo *p, hints, *res;
-   int addrlen, nbytes, status;
+
+   int nbytes, status;
    char buf[MAXDATASIZE], ac_server[INET6_ADDRSTRLEN];
    SOCKET sockfd;
    WSADATA s_wsaData;
@@ -46,82 +183,36 @@ int main(int argc,char *argv[])
    }
 
 
-   memset(&hints,0,sizeof(hints));
-
-   hints.ai_family   = AF_UNSPEC;   // AF_INET or AF_INET6 to force version
-   hints.ai_socktype = SOCK_STREAM; // Streaming socket
+   
+   sockfd = ConnectToServer(argv[1]);
 
 
-   if (getaddrinfo(argv[1],PORT,&hints,&res) != 0)
+
+   while(true)
    {
-
-      fprintf(stderr,"getaddrinfo catastrophically failed");
-      WSACleanup();
-
-      return 0;
-   }
-
-   for (p = res ; p != NULL ; p = p->ai_next)
-   {
-      sockfd = socket(p->ai_family,p->ai_socktype,p->ai_protocol);
-      if (sockfd == INVALID_SOCKET)
+      nbytes = recv(sockfd,buf,MAXDATASIZE-1,0);
+      if (nbytes == SOCKET_ERROR)
       {
-         fprintf(stderr,"socket failed");
+         fprintf(stderr,"recv catastrophically failed or server unexpectedly shutdown.\n");
+         sockfd = ConnectToServer(argv[1]);
+         continue;
+      }
+      else if (nbytes == 0)
+      {
+         fprintf(stderr,"Socket closed by server.\n");
+         sockfd = ConnectToServer(argv[1]);
          continue;
       }
 
-      addrlen = (int)p->ai_addrlen;
-      status = connect(sockfd,p->ai_addr,addrlen);
+      
 
-      if (status == SOCKET_ERROR)
-      {
-         fprintf(stderr,"connect failed");
-         closesocket(sockfd);
-         continue;
-      }
 
-      break;
+      buf[nbytes] = '\0';
+
+      printf("Received '%s'\n",buf);
+
+
    }
-/*                                                                            */
-/* Check for a connection:                                                    */
-/*                                                                            */
-   if (p == NULL)
-   {
-      fprintf(stderr,"Failed to connect.\n");
-      freeaddrinfo(p);
-      WSACleanup();
-      return 0;
-   }
-/*                                                                            */
-/* Tell user to which server a connection was made:                           */
-/*                                                                            */
-
-
-   freeaddrinfo(res);
-
-   nbytes = recv(sockfd,buf,MAXDATASIZE-1,0);
-
-   if (nbytes == SOCKET_ERROR)
-   {
-      fprintf(stderr,"recv catastrophically failed");
-      closesocket(sockfd);
-      WSACleanup();
-
-      return 0;
-   }
-   else if (nbytes == 0)
-   {
-      fprintf(stderr,"Socket closed by server.\n");
-      closesocket(sockfd);
-      WSACleanup();
-
-      return 0;
-   }
-
-
-   buf[nbytes] = '\0';
-
-   printf("Received '%s'\n",buf);
 
    closesocket(sockfd);
 
